@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Wav2Png Replica</title>
+    <style>
+        body { font-family: monospace; background: black; color: white; }
+        button { background: gray; color: white; padding: 0.5em; }
+        canvas { border: 1px solid white; }
+        .progress { color: blue; }
+        #loading { background: rgba(0,0,0,0.5); position: fixed; top: 0; left: 0; width: 100%; height: 100%; display: none; text-align: center; line-height: 100vh; font-size: 2em; }
+        #cameraPreview { width: 100%; max-width: 400px; display: none; }
+        #captureCanvas { display: none; }
+    </style>
+</head>
+<body>
+    <h1>Audio to Image Converter (Replica)</h1>
+    
+    <label>Choose Channel: 
+        <input type="radio" name="channel" value="0" checked> Left
+        <input type="radio" name="channel" value="1"> Right
+    </label>
+    
+    <section>
+        <h2>WAV to PNG</h2>
+        <input type="file" id="audioInput" accept=".wav">
+        <button onclick="convertAudioToPng()">Convert to PNG</button>
+        <div id="wavToPngProgress" class="progress"></div>
+        <canvas id="waveformCanvas" width="3000" height="500" style="display: none;"></canvas>
+        <a id="downloadPng" style="display:none;">Download PNG</a>
+    </section>
+    
+    <section>
+        <h2>PNG to WAV (Upload or Scan)</h2>
+        <input type="file" id="pngInput" accept=".png,.jpg,.jpeg">
+        <button onclick="convertPngToAudio()">Convert Uploaded to WAV</button>
+        <button onclick="startCameraScan()">Scan with Camera</button>
+        <video id="cameraPreview" autoplay playsinline></video>
+        <button id="captureButton" style="display:none;" onclick="captureImage()">Capture & Convert</button>
+        <canvas id="captureCanvas"></canvas>
+        <a id="downloadCaptured" style="display:none;">Download Captured Image</a>
+        <div id="pngToWavProgress" class="progress"></div>
+        <a id="downloadWav" style="display:none;">Download WAV</a>
+        <audio id="audioPlayer" controls style="display:none;"></audio>
+    </section>
+    
+    <div id="loading">Loading...</div>
+    
+    <script>
+        // Base conversion functions (unchanged from reference)
+        function showLoading(show) {
+            document.getElementById('loading').style.display = show ? 'block' : 'none';
+        }
+        
+        async function convertAudioToPng() {
+            const file = document.getElementById('audioInput').files[0];
+            if (!file) return alert('Upload a WAV file');
+            
+            showLoading(true);
+            const progressDiv = document.getElementById('wavToPngProgress');
+            progressDiv.textContent = 'Converting... 0% done';
+            
+            const channelIndex = parseInt(document.querySelector('input[name="channel"]:checked').value);
+            const audioContext = new AudioContext();
+            const arrayBuffer = await file.arrayBuffer();
+            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+            
+            const channelData = audioBuffer.getChannelData(channelIndex);
+            const numSamples = channelData.length;
+            const stride = 3000;
+            const imgHeight = Math.ceil(numSamples / stride);
+            
+            const canvas = document.getElementById('waveformCanvas');
+            canvas.width = stride;
+            canvas.height = imgHeight;
+            const ctx = canvas.getContext('2d');
+            const imageData = ctx.createImageData(stride, imgHeight);
+            
+            const audioArray = new Array(numSamples);
+            for (let i = 0; i < numSamples; i++) {
+                const progress = Math.round((i / numSamples) * 100);
+                progressDiv.textContent = `Converting samples... ${progress}% done`;
+                audioArray[i] = ((Math.max(-1, Math.min(1, channelData[i])) + 1) * 0.5) * 768;
+            }
+            
+            let index = 0;
+            for (let y = 0; y < imgHeight; y++) {
+                for (let x = 0; x < stride; x++) {
+                    if (index >= numSamples) break;
+                    const value = audioArray[index];
+                    const pixelIndex = (y * stride + x) * 4;
+                    imageData.data[pixelIndex] = Math.max(0, Math.min(255, value));
+                    imageData.data[pixelIndex + 1] = Math.max(0, Math.min(255, value - 256));
+                    imageData.data[pixelIndex + 2] = Math.max(0, Math.min(255, value - 512));
+                    imageData.data[pixelIndex + 3] = 255;
+                    index++;
+                }
+            }
+            ctx.putImageData(imageData, 0, 0);
+            
+            progressDiv.textContent = 'Converting... 100% done';
+            const downloadLink = document.getElementById('downloadPng');
+            downloadLink.href = canvas.toDataURL('image/png');
+            downloadLink.download = 'waveform.png';
+            downloadLink.style.display = 'block';
+            downloadLink.textContent = 'Download PNG';
+            setTimeout(() => { progressDiv.textContent = ''; }, 2000);
+            showLoading(false);
+        }
+        
+        async function convertPngToAudio() {
+            const file = document.getElementById('pngInput').files[0];
+            if (!file) return alert('Upload a PNG file');
+            
+            showLoading(true);
+            const progressDiv = document.getElementById('pngToWavProgress');
+            progressDiv.textContent = 'Converting... 0% done';
+            
+            const img = new Image();
+            img.src = URL.createObjectURL(file);
+            await new Promise(resolve => img.onload = resolve);
+            
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+            
+            const numSamples = (canvas.width * canvas.height);
+            const samples = new Float32Array(numSamples);
+            
+            for (let i = 0; i < imageData.length; i += 4) {
+                const progress = Math.round((i / imageData.length) * 100);
+                progressDiv.textContent = `Processing pixels... ${progress}% done`;
+                
+                const sum = imageData[i] + imageData[i + 1] + imageData[i + 2];
+                samples[i / 4] = ((sum / 768) - 0.5) * 2;
+            }
+            
+            // Build WAV
+            const sampleRate = 44100;
+            const bufferLength = 44 + numSamples * 2;
+            const arrayBuffer = new ArrayBuffer(bufferLength);
+            const view = new DataView(arrayBuffer);
+            
+            writeString(view, 0, 'RIFF');
+            view.setUint32(4, 36 + numSamples * 2, true);
+            writeString(view, 8, 'WAVE');
+            writeString(view, 12, 'fmt ');
+            view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true);
+            view.setUint16(22, 1, true);
+            view.setUint32(24, sampleRate, true);
+            view.setUint32(28, sampleRate * 2, true);
+            view.setUint16(32, 2, true);
+            view.setUint16(34, 16, true);
+            writeString(view, 36, 'data');
+            view.setUint32(40, numSamples * 2, true);
+            
+            for (let i = 0; i < numSamples; i++) {
+                const sample = Math.max(-1, Math.min(1, samples[i]));
+                view.setInt16(44 + i * 2, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+            }
+            
+            progressDiv.textContent = 'Converting... 100% done';
+            const wavBlob = new Blob([view], { type: 'audio/wav' });
+            const downloadLink = document.getElementById('downloadWav');
+            downloadLink.href = URL.createObjectURL(wavBlob);
+            downloadLink.download = 'reconstructed.wav';
+            downloadLink.style.display = 'block';
+            downloadLink.textContent = 'Download WAV';
+            setTimeout(() => { progressDiv.textContent = ''; }, 2000);
+            showLoading(false);
+            
+            // Auto-show and play in audio player
+            const audioPlayer = document.getElementById('audioPlayer');
+            audioPlayer.src = URL.createObjectURL(wavBlob);
+            audioPlayer.style.display = 'block';
+            audioPlayer.play(); // Auto-play (browser may require user interaction)
+        }
+        
+        function writeString(view, offset, string) {
+            for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+            }
+        }
+        
+        // New: Camera Scan Functionality
+        let videoStream;
+        async function startCameraScan() {
+            const video = document.getElementById('cameraPreview');
+            video.style.display = 'block';
+            document.getElementById('captureButton').style.display = 'block';
+            
+            try {
+                videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                video.srcObject = videoStream;
+            } catch (error) {
+                alert('Camera access denied or not available. Please grant permissions.');
+            }
+        }
+        
+        function captureImage() {
+            const video = document.getElementById('cameraPreview');
+            const canvas = document.getElementById('captureCanvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
+            // Stop camera
+            videoStream.getTracks().forEach(track => track.stop());
+            video.style.display = 'none';
+            document.getElementById('captureButton').style.display = 'none';
+            
+            // Download captured image as PNG
+            const downloadLink = document.getElementById('downloadCaptured');
+            downloadLink.href = canvas.toDataURL('image/png');
+            downloadLink.download = 'captured_waveform.png';
+            downloadLink.style.display = 'block';
+            downloadLink.textContent = 'Download Captured Image';
+            
+            // Feed captured image to conversion (simulate file upload)
+            canvas.toBlob(async (blob) => {
+                const file = new File([blob], 'captured.png', { type: 'image/png' });
+                await convertPngToAudioFromBlob(file); // Call modified conversion
+            }, 'image/png');
+        }
+        
+        // Helper to run conversion from blob (for scan)
+        async function convertPngToAudioFromBlob(file) {
+            showLoading(true);
+            const progressDiv = document.getElementById('pngToWavProgress');
+            progressDiv.textContent = 'Converting scanned image... 0% done';
+            
+            const img = new Image();
+            img.src = URL.createObjectURL(file);
+            await new Promise(resolve => img.onload = resolve);
+            
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+            
+            const numSamples = (canvas.width * canvas.height);
+            const samples = new Float32Array(numSamples);
+            
+            for (let i = 0; i < imageData.length; i += 4) {
+                const progress = Math.round((i / imageData.length) * 100);
+                progressDiv.textContent = `Processing scanned pixels... ${progress}% done`;
+                
+                const sum = imageData[i] + imageData[i + 1] + imageData[i + 2];
+                samples[i / 4] = ((sum / 768) - 0.5) * 2;
+            }
+            
+            // Build WAV (same as base)
+            const sampleRate = 44100;
+            const bufferLength = 44 + numSamples * 2;
+            const arrayBuffer = new ArrayBuffer(bufferLength);
+            const view = new DataView(arrayBuffer);
+            
+            writeString(view, 0, 'RIFF');
+            view.setUint32(4, 36 + numSamples * 2, true);
+            writeString(view, 8, 'WAVE');
+            writeString(view, 12, 'fmt ');
+            view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true);
+            view.setUint16(22, 1, true);
+            view.setUint32(24, sampleRate, true);
+            view.setUint32(28, sampleRate * 2, true);
+            view.setUint16(32, 2, true);
+            view.setUint16(34, 16, true);
+            writeString(view, 36, 'data');
+            view.setUint32(40, numSamples * 2, true);
+            
+            for (let i = 0; i < numSamples; i++) {
+                const sample = Math.max(-1, Math.min(1, samples[i]));
+                view.setInt16(44 + i * 2, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+            }
+            
+            progressDiv.textContent = 'Converting... 100% done';
+            const wavBlob = new Blob([view], { type: 'audio/wav' });
+            const downloadLink = document.getElementById('downloadWav');
+            downloadLink.href = URL.createObjectURL(wavBlob);
+            downloadLink.download = 'reconstructed.wav';
+            downloadLink.style.display = 'block';
+            downloadLink.textContent = 'Download WAV';
+            setTimeout(() => { progressDiv.textContent = ''; }, 2000);
+            showLoading(false);
+            
+            // Auto-show player
+            const audioPlayer = document.getElementById('audioPlayer');
+            audioPlayer.src = URL.createObjectURL(wavBlob);
+            audioPlayer.style.display = 'block';
+            audioPlayer.play();
+        }
+    </script>
+</body>
+</html>
