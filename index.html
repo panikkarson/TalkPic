@@ -47,7 +47,7 @@
     <div id="loading">Loading...</div>
     
     <script>
-        // Base conversion functions (unchanged from reference)
+        // Base conversion functions (unchanged)
         function showLoading(show) {
             document.getElementById('loading').style.display = show ? 'block' : 'none';
         }
@@ -173,11 +173,11 @@
             setTimeout(() => { progressDiv.textContent = ''; }, 2000);
             showLoading(false);
             
-            // Auto-show and play in audio player
+            // Auto-show player
             const audioPlayer = document.getElementById('audioPlayer');
             audioPlayer.src = URL.createObjectURL(wavBlob);
             audioPlayer.style.display = 'block';
-            audioPlayer.play(); // Auto-play (browser may require user interaction)
+            audioPlayer.play();
         }
         
         function writeString(view, offset, string) {
@@ -186,7 +186,7 @@
             }
         }
         
-        // New: Camera Scan Functionality
+        // Updated: Camera Scan with Back Camera Preference
         let videoStream;
         async function startCameraScan() {
             const video = document.getElementById('cameraPreview');
@@ -194,10 +194,17 @@
             document.getElementById('captureButton').style.display = 'block';
             
             try {
-                videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                // Force back camera (environment-facing)
+                videoStream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment' } // Prefers back camera
+                });
                 video.srcObject = videoStream;
             } catch (error) {
-                alert('Camera access denied or not available. Please grant permissions.');
+                console.error('Error accessing back camera:', error);
+                alert('Back camera not available. Falling back to default camera.');
+                // Fallback to any camera if back fails
+                videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                video.srcObject = videoStream;
             }
         }
         
@@ -221,14 +228,14 @@
             downloadLink.style.display = 'block';
             downloadLink.textContent = 'Download Captured Image';
             
-            // Feed captured image to conversion (simulate file upload)
+            // Feed captured image to conversion
             canvas.toBlob(async (blob) => {
                 const file = new File([blob], 'captured.png', { type: 'image/png' });
-                await convertPngToAudioFromBlob(file); // Call modified conversion
+                await convertPngToAudioFromBlob(file);
             }, 'image/png');
         }
         
-        // Helper to run conversion from blob (for scan)
+        // Helper for conversion from blob (unchanged)
         async function convertPngToAudioFromBlob(file) {
             showLoading(true);
             const progressDiv = document.getElementById('pngToWavProgress');
