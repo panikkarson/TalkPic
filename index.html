@@ -35,6 +35,7 @@
         <input type="file" id="pngInput" accept=".png,.jpg,.jpeg">
         <button onclick="convertPngToAudio()">Convert Uploaded to WAV</button>
         <button onclick="startCameraScan()">Scan with Camera</button>
+        <label><input type="checkbox" id="enhanceScan" checked> Enhance Scanned Image (Reduce Noise)</label>
         <video id="cameraPreview" autoplay playsinline></video>
         <button id="captureButton" style="display:none;" onclick="captureImage()">Capture & Convert</button>
         <canvas id="captureCanvas"></canvas>
@@ -53,6 +54,7 @@
         }
         
         async function convertAudioToPng() {
+            // [Unchanged full function]
             const file = document.getElementById('audioInput').files[0];
             if (!file) return alert('Upload a WAV file');
             
@@ -109,6 +111,7 @@
         }
         
         async function convertPngToAudio() {
+            // [Unchanged full function for upload]
             const file = document.getElementById('pngInput').files[0];
             if (!file) return alert('Upload a PNG file');
             
@@ -186,7 +189,7 @@
             }
         }
         
-        // Updated: Camera Scan with Back Camera Preference
+        // Camera Scan with Back Camera
         let videoStream;
         async function startCameraScan() {
             const video = document.getElementById('cameraPreview');
@@ -194,15 +197,12 @@
             document.getElementById('captureButton').style.display = 'block';
             
             try {
-                // Force back camera (environment-facing)
                 videoStream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: 'environment' } // Prefers back camera
+                    video: { facingMode: 'environment' }
                 });
                 video.srcObject = videoStream;
             } catch (error) {
-                console.error('Error accessing back camera:', error);
-                alert('Back camera not available. Falling back to default camera.');
-                // Fallback to any camera if back fails
+                alert('Back camera not available. Falling back to default.');
                 videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
                 video.srcObject = videoStream;
             }
@@ -221,22 +221,76 @@
             video.style.display = 'none';
             document.getElementById('captureButton').style.display = 'none';
             
-            // Download captured image as PNG
+            // Enhanced processing if checked
+            if (document.getElementById('enhanceScan').checked) {
+                enhanceCapturedImage(canvas);
+            }
+            
+            // Download captured image
             const downloadLink = document.getElementById('downloadCaptured');
             downloadLink.href = canvas.toDataURL('image/png');
             downloadLink.download = 'captured_waveform.png';
             downloadLink.style.display = 'block';
             downloadLink.textContent = 'Download Captured Image';
             
-            // Feed captured image to conversion
+            // Convert to WAV
             canvas.toBlob(async (blob) => {
                 const file = new File([blob], 'captured.png', { type: 'image/png' });
                 await convertPngToAudioFromBlob(file);
             }, 'image/png');
         }
         
+        // Updated: Stronger Enhancement for Scanned Prints
+        function enhanceCapturedImage(canvas) {
+            const ctx = canvas.getContext('2d');
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const data = imageData.data;
+            
+            // Step 1: Grayscale and threshold filtering (ignore low-variance noise)
+            let min = 255, max = 0;
+            for (let i = 0; i < data.length; i += 4) {
+                const avg = (data[i] + data[i+1] + data[i+2]) / 3;
+                if (avg > 20 && avg < 235) { // Threshold to ignore extreme white/black artifacts
+                    data[i] = data[i+1] = data[i+2] = avg;
+                    min = Math.min(min, avg);
+                    max = Math.max(max, avg);
+                } else {
+                    data[i] = data[i+1] = data[i+2] = 128; // Neutral gray for artifacts
+                }
+            }
+            
+            // Step 2: Stretch contrast to fix overexposure
+            const range = max - min;
+            if (range > 0) {
+                for (let i = 0; i < data.length; i += 4) {
+                    const normalized = ((data[i] - min) / range) * 255;
+                    data[i] = data[i+1] = data[i+2] = Math.min(255, Math.max(0, normalized));
+                }
+            }
+            
+            // Step 3: Advanced smoothing (3x3 kernel for blur reduction)
+            const tempData = data.slice();
+            for (let y = 1; y < canvas.height - 1; y++) {
+                for (let x = 1; x < canvas.width - 1; x++) {
+                    let sum = 0;
+                    for (let ky = -1; ky <= 1; ky++) {
+                        for (let kx = -1; kx <= 1; kx++) {
+                            const idx = ((y + ky) * canvas.width + (x + kx)) * 4;
+                            sum += tempData[idx];
+                        }
+                    }
+                    const avg = sum / 9;
+                    const i = (y * canvas.width + x) * 4;
+                    data[i] = data[i+1] = data[i+2] = avg;
+                }
+            }
+            
+            ctx.putImageData(imageData, 0, 0);
+        }
+        
         // Helper for conversion from blob (unchanged)
         async function convertPngToAudioFromBlob(file) {
+            // [Full unchanged function]
             showLoading(true);
             const progressDiv = document.getElementById('pngToWavProgress');
             progressDiv.textContent = 'Converting scanned image... 0% done';
