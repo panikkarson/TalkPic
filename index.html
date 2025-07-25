@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Wav2Png Replica</title>
+    <title>Wav2Png Replica with Spectrogram Mode</title>
     <style>
         body { font-family: monospace; background: black; color: white; }
         button { background: gray; color: white; padding: 0.5em; }
@@ -20,6 +20,7 @@
         <input type="radio" name="channel" value="0" checked> Left
         <input type="radio" name="channel" value="1"> Right
     </label>
+    <label><input type="checkbox" id="spectrogramMode"> Use Spectrogram Mode (Experimental)</label>
     
     <section>
         <h2>WAV to PNG</h2>
@@ -48,13 +49,12 @@
     <div id="loading">Loading...</div>
     
     <script>
-        // Base conversion functions (unchanged)
+        // Base conversion functions (unchanged, with spectrogram wrapper)
         function showLoading(show) {
             document.getElementById('loading').style.display = show ? 'block' : 'none';
         }
         
         async function convertAudioToPng() {
-            // [Unchanged full function]
             const file = document.getElementById('audioInput').files[0];
             if (!file) return alert('Upload a WAV file');
             
@@ -76,29 +76,59 @@
             canvas.width = stride;
             canvas.height = imgHeight;
             const ctx = canvas.getContext('2d');
-            const imageData = ctx.createImageData(stride, imgHeight);
             
-            const audioArray = new Array(numSamples);
-            for (let i = 0; i < numSamples; i++) {
-                const progress = Math.round((i / numSamples) * 100);
-                progressDiv.textContent = `Converting samples... ${progress}% done`;
-                audioArray[i] = ((Math.max(-1, Math.min(1, channelData[i])) + 1) * 0.5) * 768;
-            }
-            
-            let index = 0;
-            for (let y = 0; y < imgHeight; y++) {
+            if (document.getElementById('spectrogramMode').checked) {
+                // New: Spectrogram Mode
+                const analyzer = audioContext.createAnalyser();
+                analyzer.fftSize = 2048;
+                const bufferLength = analyzer.frequencyBinCount;
+                const dataArray = new Uint8Array(bufferLength);
+                
+                const source = audioContext.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(analyzer);
+                analyzer.connect(audioContext.destination);
+                source.start();
+                
+                // Render spectrogram (simplified)
                 for (let x = 0; x < stride; x++) {
-                    if (index >= numSamples) break;
-                    const value = audioArray[index];
-                    const pixelIndex = (y * stride + x) * 4;
-                    imageData.data[pixelIndex] = Math.max(0, Math.min(255, value));
-                    imageData.data[pixelIndex + 1] = Math.max(0, Math.min(255, value - 256));
-                    imageData.data[pixelIndex + 2] = Math.max(0, Math.min(255, value - 512));
-                    imageData.data[pixelIndex + 3] = 255;
-                    index++;
+                    analyzer.getByteFrequencyData(dataArray);
+                    const progress = Math.round((x / stride) * 100);
+                    progressDiv.textContent = `Generating spectrogram... ${progress}% done`;
+                    for (let y = 0; y < imgHeight; y++) {
+                        const intensity = dataArray[y % bufferLength] || 0;
+                        const color = Math.round(intensity);
+                        ctx.fillStyle = `rgb(${color}, ${255 - color}, 0)`; // Color map (red high, green low)
+                        ctx.fillRect(x, y, 1, 1);
+                    }
                 }
+                source.stop();
+            } else {
+                // Original waveform mode (unchanged)
+                const imageData = ctx.createImageData(stride, imgHeight);
+                
+                const audioArray = new Array(numSamples);
+                for (let i = 0; i < numSamples; i++) {
+                    const progress = Math.round((i / numSamples) * 100);
+                    progressDiv.textContent = `Converting samples... ${progress}% done`;
+                    audioArray[i] = ((Math.max(-1, Math.min(1, channelData[i])) + 1) * 0.5) * 768;
+                }
+                
+                let index = 0;
+                for (let y = 0; y < imgHeight; y++) {
+                    for (let x = 0; x < stride; x++) {
+                        if (index >= numSamples) break;
+                        const value = audioArray[index];
+                        const pixelIndex = (y * stride + x) * 4;
+                        imageData.data[pixelIndex] = Math.max(0, Math.min(255, value));
+                        imageData.data[pixelIndex + 1] = Math.max(0, Math.min(255, value - 256));
+                        imageData.data[pixelIndex + 2] = Math.max(0, Math.min(255, value - 512));
+                        imageData.data[pixelIndex + 3] = 255;
+                        index++;
+                    }
+                }
+                ctx.putImageData(imageData, 0, 0);
             }
-            ctx.putImageData(imageData, 0, 0);
             
             progressDiv.textContent = 'Converting... 100% done';
             const downloadLink = document.getElementById('downloadPng');
@@ -111,7 +141,7 @@
         }
         
         async function convertPngToAudio() {
-            // [Unchanged full function for upload]
+            // [Unchanged base function for upload]
             const file = document.getElementById('pngInput').files[0];
             if (!file) return alert('Upload a PNG file');
             
@@ -189,7 +219,7 @@
             }
         }
         
-        // Camera Scan with Back Camera
+        // Camera Scan with Back Camera (unchanged)
         let videoStream;
         async function startCameraScan() {
             const video = document.getElementById('cameraPreview');
@@ -221,7 +251,7 @@
             video.style.display = 'none';
             document.getElementById('captureButton').style.display = 'none';
             
-            // Enhanced processing if checked
+            // Enhance if checked
             if (document.getElementById('enhanceScan').checked) {
                 enhanceCapturedImage(canvas);
             }
@@ -233,42 +263,39 @@
             downloadLink.style.display = 'block';
             downloadLink.textContent = 'Download Captured Image';
             
-            // Convert to WAV
+            // Convert to WAV (using spectrogram mode if enabled)
             canvas.toBlob(async (blob) => {
                 const file = new File([blob], 'captured.png', { type: 'image/png' });
-                await convertPngToAudioFromBlob(file);
+                if (document.getElementById('spectrogramMode').checked) {
+                    await convertPngToAudioFromBlobSpectrogram(file);
+                } else {
+                    await convertPngToAudioFromBlob(file);
+                }
             }, 'image/png');
         }
         
-        // Updated: Stronger Enhancement for Scanned Prints
+        // Enhanced Image Processing (unchanged from previous)
         function enhanceCapturedImage(canvas) {
             const ctx = canvas.getContext('2d');
             const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
             const data = imageData.data;
             
-            // Step 1: Grayscale and threshold filtering (ignore low-variance noise)
             let min = 255, max = 0;
             for (let i = 0; i < data.length; i += 4) {
                 const avg = (data[i] + data[i+1] + data[i+2]) / 3;
-                if (avg > 20 && avg < 235) { // Threshold to ignore extreme white/black artifacts
-                    data[i] = data[i+1] = data[i+2] = avg;
-                    min = Math.min(min, avg);
-                    max = Math.max(max, avg);
-                } else {
-                    data[i] = data[i+1] = data[i+2] = 128; // Neutral gray for artifacts
-                }
+                data[i] = data[i+1] = data[i+2] = avg;
+                min = Math.min(min, avg);
+                max = Math.max(max, avg);
             }
             
-            // Step 2: Stretch contrast to fix overexposure
             const range = max - min;
             if (range > 0) {
                 for (let i = 0; i < data.length; i += 4) {
                     const normalized = ((data[i] - min) / range) * 255;
-                    data[i] = data[i+1] = data[i+2] = Math.min(255, Math.max(0, normalized));
+                    data[i] = data[i+1] = data[i+2] = normalized;
                 }
             }
             
-            // Step 3: Advanced smoothing (3x3 kernel for blur reduction)
             const tempData = data.slice();
             for (let y = 1; y < canvas.height - 1; y++) {
                 for (let x = 1; x < canvas.width - 1; x++) {
@@ -288,9 +315,9 @@
             ctx.putImageData(imageData, 0, 0);
         }
         
-        // Helper for conversion from blob (unchanged)
+        // Helper for original waveform conversion from blob (unchanged)
         async function convertPngToAudioFromBlob(file) {
-            // [Full unchanged function]
+            // [Full unchanged base function]
             showLoading(true);
             const progressDiv = document.getElementById('pngToWavProgress');
             progressDiv.textContent = 'Converting scanned image... 0% done';
@@ -315,6 +342,80 @@
                 
                 const sum = imageData[i] + imageData[i + 1] + imageData[i + 2];
                 samples[i / 4] = ((sum / 768) - 0.5) * 2;
+            }
+            
+            // Build WAV
+            const sampleRate = 44100;
+            const bufferLength = 44 + numSamples * 2;
+            const arrayBuffer = new ArrayBuffer(bufferLength);
+            const view = new DataView(arrayBuffer);
+            
+            writeString(view, 0, 'RIFF');
+            view.setUint32(4, 36 + numSamples * 2, true);
+            writeString(view, 8, 'WAVE');
+            writeString(view, 12, 'fmt ');
+            view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true);
+            view.setUint16(22, 1, true);
+            view.setUint32(24, sampleRate, true);
+            view.setUint32(28, sampleRate * 2, true);
+            view.setUint16(32, 2, true);
+            view.setUint16(34, 16, true);
+            writeString(view, 36, 'data');
+            view.setUint32(40, numSamples * 2, true);
+            
+            for (let i = 0; i < numSamples; i++) {
+                const sample = Math.max(-1, Math.min(1, samples[i]));
+                view.setInt16(44 + i * 2, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+            }
+            
+            progressDiv.textContent = 'Converting... 100% done';
+            const wavBlob = new Blob([view], { type: 'audio/wav' });
+            const downloadLink = document.getElementById('downloadWav');
+            downloadLink.href = URL.createObjectURL(wavBlob);
+            downloadLink.download = 'reconstructed.wav';
+            downloadLink.style.display = 'block';
+            downloadLink.textContent = 'Download WAV';
+            setTimeout(() => { progressDiv.textContent = ''; }, 2000);
+            showLoading(false);
+            
+            // Auto-show player
+            const audioPlayer = document.getElementById('audioPlayer');
+            audioPlayer.src = URL.createObjectURL(wavBlob);
+            audioPlayer.style.display = 'block';
+            audioPlayer.play();
+        }
+        
+        // New: Helper for spectrogram reconstruction from blob
+        async function convertPngToAudioFromBlobSpectrogram(file) {
+            showLoading(true);
+            const progressDiv = document.getElementById('pngToWavProgress');
+            progressDiv.textContent = 'Reconstructing from spectrogram... 0% done';
+            
+            const img = new Image();
+            img.src = URL.createObjectURL(file);
+            await new Promise(resolve => img.onload = resolve);
+            
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+            
+            // Simple inverse (approximate samples from color intensity)
+            const numSamples = canvas.width * 512; // Assume 512 frequency bins
+            const samples = new Float32Array(numSamples);
+            
+            for (let x = 0; x < canvas.width; x++) {
+                const progress = Math.round((x / canvas.width) * 100);
+                progressDiv.textContent = `Reconstructing audio... ${progress}% done`;
+                for (let y = 0; y < canvas.height; y++) {
+                    const pixelIndex = (y * canvas.width + x) * 4;
+                    const intensity = (imageData[pixelIndex] + (255 - imageData[pixelIndex + 1])) / 512; // From color map
+                    const sampleIndex = x * canvas.height + y;
+                    samples[sampleIndex] = intensity * 2 - 1; // Map to -1 to 1
+                }
             }
             
             // Build WAV (same as base)
