@@ -78,7 +78,7 @@
             const ctx = canvas.getContext('2d');
             
             if (document.getElementById('spectrogramMode').checked) {
-                // Spectrogram Mode (fixed for non-silent output)
+                // Spectrogram Mode
                 const analyzer = audioContext.createAnalyser();
                 analyzer.fftSize = 2048;
                 const bufferLength = analyzer.frequencyBinCount;
@@ -95,8 +95,8 @@
                     const progress = Math.round((x / stride) * 100);
                     progressDiv.textContent = `Generating spectrogram... ${progress}% done`;
                     for (let y = 0; y < imgHeight; y++) {
-                        const intensity = (dataArray[y % bufferLength] || 0) / 255; // Normalize 0-1
-                        const boosted = intensity * 2; // Boost to avoid silence
+                        const intensity = (dataArray[y % bufferLength] || 0) / 255;
+                        const boosted = intensity * 2;
                         const r = Math.round(255 * boosted);
                         const g = Math.round(128 * (1 - boosted));
                         ctx.fillStyle = `rgb(${r}, ${g}, 0)`;
@@ -220,12 +220,13 @@
             }
         }
         
-        // Camera Scan (unchanged)
-        let videoStream;
+        // Camera Scan with Back Camera (fixed declaration)
         async function startCameraScan() {
             const video = document.getElementById('cameraPreview');
             video.style.display = 'block';
             document.getElementById('captureButton').style.display = 'block';
+            
+            let videoStream; // Declared inside function
             
             try {
                 videoStream = await navigator.mediaDevices.getUserMedia({
@@ -248,7 +249,9 @@
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
             
             // Stop camera
-            videoStream.getTracks().forEach(track => track.stop());
+            if (video.srcObject) {
+                video.srcObject.getTracks().forEach(track => track.stop());
+            }
             video.style.display = 'none';
             document.getElementById('captureButton').style.display = 'none';
             
@@ -264,7 +267,7 @@
             downloadLink.style.display = 'block';
             downloadLink.textContent = 'Download Captured Image';
             
-            // Convert to WAV (check for spectrogram mode)
+            // Convert to WAV (check mode)
             canvas.toBlob(async (blob) => {
                 const file = new File([blob], 'captured.png', { type: 'image/png' });
                 if (document.getElementById('spectrogramMode').checked) {
@@ -318,7 +321,6 @@
         
         // Helper for original waveform conversion from blob (unchanged)
         async function convertPngToAudioFromBlob(file) {
-            // [Full unchanged base function, as before]
             showLoading(true);
             const progressDiv = document.getElementById('pngToWavProgress');
             progressDiv.textContent = 'Converting scanned image... 0% done';
@@ -387,7 +389,7 @@
             audioPlayer.play();
         }
         
-        // New: Helper for spectrogram reconstruction (fixed for sound)
+        // New: Helper for spectrogram reconstruction (fixed for sound and size)
         async function convertPngToAudioFromBlobSpectrogram(file) {
             showLoading(true);
             const progressDiv = document.getElementById('pngToWavProgress');
@@ -404,19 +406,30 @@
             ctx.drawImage(img, 0, 0);
             const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
             
-            // Improved reconstruction (add basic phase estimation for sound)
-            const numSamples = canvas.width * 512; // Higher for longer audio
+            // Fixed: Scale numSamples for larger files
+            const numSamples = canvas.width * 512 * 4; // Scaled up for size (adjust if too large)
             const samples = new Float32Array(numSamples);
             
+            let sampleIndex = 0;
             for (let x = 0; x < canvas.width; x++) {
                 const progress = Math.round((x / canvas.width) * 100);
                 progressDiv.textContent = `Reconstructing audio... ${progress}% done`;
                 for (let y = 0; y < canvas.height; y++) {
                     const pixelIndex = (y * canvas.width + x) * 4;
                     const intensity = (imageData[pixelIndex] + (255 - imageData[pixelIndex + 1])) / 512;
-                    const sampleIndex = x * canvas.height + y;
-                    samples[sampleIndex] = intensity * 2 - 1 + Math.sin(sampleIndex * 0.01) * 0.1; // Add phase for non-silence
+                    for (let s = 0; s < 4; s++) { // Duplicate for length
+                        if (sampleIndex < numSamples) {
+                            samples[sampleIndex] = intensity * 2 - 1 + Math.sin(sampleIndex * 0.01) * 0.2; // Add phase and amplitude
+                            sampleIndex++;
+                        }
+                    }
                 }
+            }
+            
+            if (sampleIndex < 100) {
+                alert('Audio data too low - try a larger input file.');
+                showLoading(false);
+                return;
             }
             
             // Build WAV (same as base)
@@ -502,12 +515,13 @@
             ctx.putImageData(imageData, 0, 0);
         }
         
-        // Camera Scan (unchanged)
-        let videoStream;
+        // Camera Scan with Back Camera (fixed declaration)
         async function startCameraScan() {
             const video = document.getElementById('cameraPreview');
             video.style.display = 'block';
             document.getElementById('captureButton').style.display = 'block';
+            
+            let videoStream; // Declared inside function
             
             try {
                 videoStream = await navigator.mediaDevices.getUserMedia({
@@ -530,7 +544,9 @@
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
             
             // Stop camera
-            videoStream.getTracks().forEach(track => track.stop());
+            if (video.srcObject) {
+                video.srcObject.getTracks().forEach(track => track.stop());
+            }
             video.style.display = 'none';
             document.getElementById('captureButton').style.display = 'none';
             
